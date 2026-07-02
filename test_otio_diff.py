@@ -178,3 +178,28 @@ def test_missing_available_range_does_not_crash():
     tl = _timeline([clip])
     recs = flatten_timeline(tl)  # should not raise
     assert recs[0].media_url is None
+
+
+def test_human_detail_frames():
+    """Frame-accurate detail lines: B trimmed 48f->36f at 24fps reads in frames."""
+    from otio_diff import human
+    B_short = ("file:///B.mov", 0.0, 36.0)
+    revised = _timeline([_clip("A", *A), _clip("B", *B_short), _clip("C", *C)])
+    d = diff(flatten_timeline(baseline()), flatten_timeline(revised))
+    out = human(d)
+    assert "B shortened by 12f (48f -> 36f)" in out
+    assert "C shifted 12f earlier" in out
+
+
+def test_load_serializable_collection(tmp_path, capsys):
+    """Adapters may return a SerializableCollection; load() picks the first
+    Timeline and warns on stderr when more than one is present."""
+    col = otio.schema.SerializableCollection(
+        name="col", children=[baseline(), _timeline([_clip("A", *A)], name="t2")]
+    )
+    path = str(tmp_path / "collection.otio")
+    otio.adapters.write_to_file(col, path)
+
+    recs = load(path)
+    assert len(recs) == 3  # the baseline timeline, not the 1-clip one
+    assert "2 timelines" in capsys.readouterr().err

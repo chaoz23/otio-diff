@@ -7,7 +7,10 @@ name = "otio-diff"
 version = "0.1.0"
 description = "Structural editorial diff between two timelines (OpenTimelineIO)."
 readme = "README.md"
-requires-python = ">=3.9"
+# <3.14: OTIO 0.18.1's adapter subsystem raises "bad any cast" loading its
+# plugin manifest on Python 3.14 (core schema works; file I/O doesn't).
+# Verified 2026-07-02; lift the cap when an OTIO release fixes it.
+requires-python = ">=3.9,<3.14"
 license = { text = "Apache-2.0" }  # match OTIO's license for easy upstream contribution
 authors = [{ name = "chaoz23", email = "chaoz23@gmail.com" }]
 keywords = ["opentimelineio", "otio", "editorial", "diff", "video", "post-production", "mcp"]

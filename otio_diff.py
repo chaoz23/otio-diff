@@ -62,6 +62,7 @@ class ClipRecord:
     timeline_start: Optional[float]   # position on the timeline in seconds, or None
     track_index: int
     position_index: int               # ordinal within its track (for move detection)
+    rate: Optional[float] = None      # clip frame rate, for seconds->frames in output
 
 
 def _seconds(rt: Optional[otio.opentime.RationalTime]) -> Optional[float]:
@@ -118,6 +119,7 @@ def flatten_timeline(tl: otio.schema.Timeline) -> list[ClipRecord]:
                     timeline_start=tl_start,
                     track_index=track_index,
                     position_index=pos,
+                    rate=(src.duration.rate if src and src.duration.rate else None),
                 ))
                 pos += 1
             elif isinstance(item, (otio.schema.Stack, otio.schema.Track)):
@@ -245,33 +247,98 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
 # ---------------------------------------------------------------------------
 
 def load(path: str) -> list[ClipRecord]:
-    """read_from_file auto-detects .otio/.edl/.fcpxml/.aaf via adapters."""
+    """
+    read_from_file auto-detects .otio/.edl/.fcpxml/.aaf via adapters.
+
+    Some adapters return a SerializableCollection rather than a Timeline
+    (multi-sequence exports). Policy: diff the FIRST Timeline found and warn on
+    stderr if there were more — diffing one pair of cuts is the tool's job;
+    element-wise multi-timeline diffing is out of v1 scope.
+    """
     tl = otio.adapters.read_from_file(path)
-    # read_from_file may return a Timeline or (for some adapters) a
-    # SerializableCollection. # TODO(handoff): if a collection, pick the first
-    # Timeline or diff element-wise. v1 assumes single Timeline.
+    if isinstance(tl, otio.schema.SerializableCollection):
+        timelines = [t for t in tl if isinstance(t, otio.schema.Timeline)]
+        if not timelines:
+            raise ValueError(f"{path}: collection contains no Timeline")
+        if len(timelines) > 1:
+            print(
+                f"warning: {path} contains {len(timelines)} timelines; "
+                f"diffing the first ({timelines[0].name or 'unnamed'})",
+                file=sys.stderr,
+            )
+        tl = timelines[0]
     return flatten_timeline(tl)
 
 
+def _label(rec: dict) -> str:
+    """Editor-facing clip label: name, falling back to the media file basename."""
+    if rec.get("name"):
+        return rec["name"]
+    url = rec.get("media_url")
+    return url.rsplit("/", 1)[-1] if url else "<unnamed>"
+
+
+def _fmt(seconds: Optional[float], rate: Optional[float]) -> str:
+    """Duration/offset for editors: frames when rate is known, else seconds."""
+    if seconds is None:
+        return "?"
+    if rate:
+        return f"{round(seconds * rate)}f"
+    return f"{seconds:.3f}s"
+
+
 def human(result: DiffResult) -> str:
-    lines = []
+    counts = []
     if result.added:
-        lines.append(f"{len(result.added)} added")
+        counts.append(f"{len(result.added)} added")
     if result.removed:
-        lines.append(f"{len(result.removed)} removed")
+        counts.append(f"{len(result.removed)} removed")
     if result.retimed:
-        lines.append(f"{len(result.retimed)} retimed")
+        counts.append(f"{len(result.retimed)} retimed")
     if result.moved:
-        lines.append(f"{len(result.moved)} moved")
+        counts.append(f"{len(result.moved)} moved")
     if result.shifted:
-        lines.append(f"{len(result.shifted)} shifted")
-    if not lines:
+        counts.append(f"{len(result.shifted)} shifted")
+    if not counts:
         return "No structural changes."
-    head = ", ".join(lines) + f" ({result.unchanged_count} unchanged)"
-    # TODO(handoff): add per-item detail lines, e.g.
-    #   "SHOT_040 shortened by 12 frames (48f -> 36f)"
-    # using rate to convert seconds->frames for editor-friendly output.
-    return head
+
+    lines = [", ".join(counts) + f" ({result.unchanged_count} unchanged)"]
+
+    for rec in result.added:
+        lines.append(f"  + {_label(rec)} added ({_fmt(rec['src_duration'], rec.get('rate'))})")
+    for rec in result.removed:
+        lines.append(f"  - {_label(rec)} removed ({_fmt(rec['src_duration'], rec.get('rate'))})")
+    for item in result.retimed:
+        ra, rb = item["before"], item["after"]
+        rate = rb.get("rate") or ra.get("rate")
+        da, db = ra["src_duration"], rb["src_duration"]
+        if da is not None and db is not None:
+            verb = "shortened" if db < da else "lengthened"
+            delta = _fmt(abs(db - da), rate)
+            lines.append(
+                f"  ~ {_label(rb)} {verb} by {delta} "
+                f"({_fmt(da, rate)} -> {_fmt(db, rate)})"
+            )
+        else:
+            lines.append(f"  ~ {_label(rb)} retimed")
+    for item in result.moved:
+        ra, rb = item["before"], item["after"]
+        lines.append(
+            f"  > {_label(rb)} moved "
+            f"(track {ra['track_index']} pos {ra['position_index']} -> "
+            f"track {rb['track_index']} pos {rb['position_index']})"
+        )
+    for item in result.shifted:
+        ra, rb = item["before"], item["after"]
+        rate = rb.get("rate") or ra.get("rate")
+        ta, tb = ra["timeline_start"], rb["timeline_start"]
+        if ta is not None and tb is not None:
+            direction = "earlier" if tb < ta else "later"
+            lines.append(f"  . {_label(rb)} shifted {_fmt(abs(tb - ta), rate)} {direction}")
+        else:
+            lines.append(f"  . {_label(rb)} shifted")
+
+    return "\n".join(lines)
 
 
 def main(argv=None) -> int:
