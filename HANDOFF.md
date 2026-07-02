@@ -1,4 +1,10 @@
-# otio-diff — Handoff Brief
+# otio-diff — Handoff Brief (historical)
+
+> **Note:** this is the original agent-to-agent handoff brief the project was
+> built from, kept for design rationale and provenance. The open items below
+> are DONE — including a revision of locked decision #2 (identity key), forced
+> by a concrete failing case; see `clip_key()` in `otio_diff.py` and
+> `validation/README.md` for the real-file gate results.
 
 **For the downstream agent completing this project.** The hard reasoning is done
 and encoded in `otio_diff.py`. Your job is to finish the marked `# TODO(handoff):`
