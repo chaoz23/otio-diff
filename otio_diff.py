@@ -129,10 +129,14 @@ def flatten_timeline(tl: otio.schema.Timeline) -> list[ClipRecord]:
                 # so a nested stack reads as inline for diff purposes.
                 walk(item, track_index)
             elif isinstance(item, otio.schema.Gap):
-                # Gaps affect downstream timecode but are not clips. Skip from the
-                # clip list; timeline_start already accounts for them via
-                # trimmed_range_of_child. No action needed.
-                pos += 1
+                # Gaps affect downstream timecode but are not clips. Skip them
+                # entirely: position_index counts CLIPS only, so a gap appearing
+                # or resizing (e.g. a lift-style trim in a real EDL) does not
+                # read as every downstream clip having "moved". Timing effects
+                # of gaps are already captured via timeline_start.
+                # (Real-file finding, 2026-07-02: counting gaps as position
+                # slots produced 6 phantom moves from one 12-frame trim.)
+                pass
             # Transitions: intentionally ignored (out of v1 scope).
 
     for t_idx, track in enumerate(tl.tracks):
@@ -203,8 +207,9 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
         b_by_key[clip_key(r)].append(r)
 
     added, removed, retimed, moved, shifted = [], [], [], [], []
-    unchanged = 0
 
+    # Phase 1: pair matched clips; classify surplus as added/removed.
+    matched: list[tuple[tuple, ClipRecord, ClipRecord]] = []
     all_keys = set(a_by_key) | set(b_by_key)
     for key in all_keys:
         a_recs = a_by_key.get(key, [])
@@ -214,30 +219,77 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
         # Verified on synthetic fixtures; see TODO in docstring re: real-file ordering.
         pairs = min(len(a_recs), len(b_recs))
         for i in range(pairs):
-            ra, rb = a_recs[i], b_recs[i]
-            changed = False
-            # retimed: the clip's own content timing changed (trimmed duration)
-            if ra.src_duration != rb.src_duration:
-                retimed.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
-                changed = True
-            # moved: same identity, different ordinal position
-            if (ra.track_index, ra.position_index) != (rb.track_index, rb.position_index):
-                moved.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
-                changed = True
-            # shifted: content and position untouched, but the clip slid on the
-            # timeline — the ripple effect of an upstream edit. Kept separate so
-            # one trim doesn't read as N retimes downstream.
-            if not changed and ra.timeline_start != rb.timeline_start:
-                shifted.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
-                changed = True
-            if not changed:
-                unchanged += 1
+            matched.append((key, a_recs[i], b_recs[i]))
 
         # surplus on A = removed, surplus on B = added
         for r in a_recs[pairs:]:
             removed.append(asdict(r))
         for r in b_recs[pairs:]:
             added.append(asdict(r))
+
+    # Phase 2: moved = RELATIVE order of matched clips changed, not absolute
+    # ordinal. Absolute position_index breaks on real files: a lift-trim inserts
+    # a Gap, a removal deletes a slot, and either way every downstream index
+    # changes while nothing actually reordered. (Real-EDL finding, 2026-07-02:
+    # one 12-frame trim read as 6 phantom moves; one removal read as 4.)
+    # Method: order matched pairs by their A-side and B-side timeline positions;
+    # the longest increasing subsequence of A-ranks in B order is the set of
+    # clips that kept their relative order — everything outside it moved. A
+    # track change is a move unconditionally.
+    moved_idx: set[int] = set()
+    same_track = [i for i, (_, ra, rb) in enumerate(matched)
+                  if ra.track_index == rb.track_index]
+    moved_idx.update(i for i in range(len(matched)) if i not in same_track)
+
+    order_a = sorted(same_track,
+                     key=lambda i: (matched[i][1].track_index, matched[i][1].position_index))
+    rank_a = {idx: n for n, idx in enumerate(order_a)}
+    order_b = sorted(same_track,
+                     key=lambda i: (matched[i][2].track_index, matched[i][2].position_index))
+    seq = [rank_a[i] for i in order_b]
+
+    # Longest increasing subsequence (patience sorting, O(n log n)); indices of
+    # seq elements in the LIS kept their relative order.
+    import bisect
+    tails: list[int] = []          # tails[k] = smallest seq value ending a LIS of length k+1
+    tails_pos: list[int] = []      # position in seq of that tail
+    prev: list[int] = [-1] * len(seq)
+    for pos, val in enumerate(seq):
+        k = bisect.bisect_left(tails, val)
+        if k == len(tails):
+            tails.append(val)
+            tails_pos.append(pos)
+        else:
+            tails[k] = val
+            tails_pos[k] = pos
+        prev[pos] = tails_pos[k - 1] if k > 0 else -1
+    in_lis: set[int] = set()
+    if tails_pos:
+        p = tails_pos[-1]
+        while p != -1:
+            in_lis.add(p)
+            p = prev[p]
+    moved_idx.update(order_b[pos] for pos in range(len(seq)) if pos not in in_lis)
+
+    # Phase 3: classify each matched pair.
+    unchanged = 0
+    for i, (key, ra, rb) in enumerate(matched):
+        changed = False
+        # retimed: the clip's own content timing changed (trimmed duration)
+        if ra.src_duration != rb.src_duration:
+            retimed.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
+            changed = True
+        if i in moved_idx:
+            moved.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
+            changed = True
+        # shifted: content and order untouched, but the clip slid on the
+        # timeline — the ripple effect of an upstream edit. Kept separate so
+        # one trim doesn't read as N retimes downstream.
+        if not changed and ra.timeline_start != rb.timeline_start:
+            shifted.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
+            changed = True
+        if not changed:
+            unchanged += 1
 
     return DiffResult(added, removed, retimed, moved, shifted, unchanged)
 
@@ -246,16 +298,23 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
 # CLI
 # ---------------------------------------------------------------------------
 
-def load(path: str) -> list[ClipRecord]:
+def load(path: str, rate: Optional[float] = None) -> list[ClipRecord]:
     """
     read_from_file auto-detects .otio/.edl/.fcpxml/.aaf via adapters.
+
+    `rate` is forwarded to the EDL adapter: CMX 3600 EDLs don't carry their
+    frame rate, and the adapter assumes 24fps — a 25fps EDL fails to parse
+    without the hint. (Real-file finding, 2026-07-02.) Only .edl accepts it.
 
     Some adapters return a SerializableCollection rather than a Timeline
     (multi-sequence exports). Policy: diff the FIRST Timeline found and warn on
     stderr if there were more — diffing one pair of cuts is the tool's job;
     element-wise multi-timeline diffing is out of v1 scope.
     """
-    tl = otio.adapters.read_from_file(path)
+    kwargs = {}
+    if rate is not None and path.lower().endswith(".edl"):
+        kwargs["rate"] = rate
+    tl = otio.adapters.read_from_file(path, **kwargs)
     if isinstance(tl, otio.schema.SerializableCollection):
         timelines = [t for t in tl if isinstance(t, otio.schema.Timeline)]
         if not timelines:
@@ -346,11 +405,13 @@ def main(argv=None) -> int:
     p.add_argument("a", help="baseline timeline (.otio/.edl/.fcpxml/.aaf)")
     p.add_argument("b", help="revised timeline (.otio/.edl/.fcpxml/.aaf)")
     p.add_argument("--json", action="store_true", help="emit JSON instead of human summary")
+    p.add_argument("--rate", type=float, default=None,
+                   help="frame rate hint for EDL inputs (EDLs don't carry it; default 24)")
     args = p.parse_args(argv)
 
     try:
-        a = load(args.a)
-        b = load(args.b)
+        a = load(args.a, rate=args.rate)
+        b = load(args.b, rate=args.rate)
     except Exception as e:  # adapters raise varied errors; surface cleanly
         print(f"error: could not read timelines: {e}", file=sys.stderr)
         return 2

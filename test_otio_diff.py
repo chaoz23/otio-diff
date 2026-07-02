@@ -121,11 +121,15 @@ def test_retimed():
 
 
 def test_moved_reorder():
-    revised = _timeline([_clip("A", *A), _clip("C", *C), _clip("B", *B)])  # B/C swap
+    # B/C swap. Moves are detected by RELATIVE order (LIS over matched clips),
+    # so a swap reads as the minimal edit: one clip dragged past another
+    # (1 moved) plus the other clip's resulting slide (1 shifted).
+    revised = _timeline([_clip("A", *A), _clip("C", *C), _clip("B", *B)])
     d = diff(flatten_timeline(baseline()), flatten_timeline(revised))
-    assert d.moved, "reorder should populate moved"
+    assert len(d.moved) == 1, "a swap is one clip dragged past another"
     assert not d.added and not d.removed and not d.retimed
-    assert not d.shifted, "moved subsumes the position change — no shifted noise"
+    assert len(d.shifted) == 1
+    assert d.unchanged_count == 1  # A
 
 
 def test_duplicate_clip_multiset():
@@ -189,6 +193,23 @@ def test_human_detail_frames():
     out = human(d)
     assert "B shortened by 12f (48f -> 36f)" in out
     assert "C shifted 12f earlier" in out
+
+
+def test_gap_insertion_is_not_a_move():
+    """A gap appearing mid-track (lift edit) must not read as downstream clips
+    having moved: position_index counts clips only. The clips after the gap DO
+    slide later in time, which reads as shifted — that part is real.
+    (Regression for a real-EDL finding: one 12f trim produced 6 phantom moves.)"""
+    gap = otio.schema.Gap(
+        source_range=otio.opentime.TimeRange(
+            duration=otio.opentime.RationalTime(12, 24),
+        )
+    )
+    revised = _timeline([_clip("A", *A), gap, _clip("B", *B), _clip("C", *C)])
+    d = diff(flatten_timeline(baseline()), flatten_timeline(revised))
+    assert not d.moved, "gap insertion must not produce phantom moves"
+    assert not d.added and not d.removed and not d.retimed
+    assert len(d.shifted) == 2  # B and C slide 12f later — genuinely shifted
 
 
 def test_exit_codes(tmp_path, capsys):
