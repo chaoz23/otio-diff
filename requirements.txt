@@ -1,0 +1,10 @@
+# Pin OTIO — core schema is stable/versioned, so this is the whole maintenance
+# surface. Bump deliberately (~once/year), re-run tests, done.
+# TODO(handoff): at ship time, pin the EXACT version you tested against, e.g.
+#   opentimelineio==0.17.0
+# Left as a floor here so `pip install` works today; tighten to == before release.
+opentimelineio>=0.17,<0.20
+
+# MCP wrapper (second deliverable). Optional at runtime for the pure CLI.
+# TODO(handoff): pin exact version tested. Package name per current Python MCP SDK.
+mcp>=1.0
