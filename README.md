@@ -2,11 +2,11 @@
 
 Structural editorial diff between two timelines. Answers one question well:
 **what changed between cut A and cut B** — which clips were added, removed,
-retimed, or reordered.
+retimed, moved, or shifted.
 
 Built on [OpenTimelineIO](https://github.com/AcademySoftwareFoundation/OpenTimelineIO),
-so it reads `.otio`, `.edl`, `.fcpxml`, and `.aaf` with no per-format code — and
-inherits OTIO's stable, versioned schema, which keeps maintenance near zero.
+so it reads any format an OTIO adapter can parse — and inherits OTIO's stable,
+versioned schema, which keeps maintenance near zero.
 
 Works as a CLI and as an MCP tool for AI agents.
 
@@ -24,10 +24,21 @@ stable, universal subset (clips, timing, order) is the whole value.
 
 ## Install
 
+Requires Python 3.9–3.13 (OTIO 0.18.1's file adapters break on 3.14).
+
 ```bash
-pip install -e .            # CLI only
-pip install -e ".[mcp]"     # CLI + MCP server
+pip install -e .            # CLI, .otio files only
+pip install -e ".[mcp]"     # + MCP server
 pip install -e ".[dev]"     # + pytest
+```
+
+`.otio` support is built in. Other formats come from OTIO adapter plugins —
+install the ones you need:
+
+```bash
+pip install otio-cmx3600-adapter    # .edl
+pip install otio-fcpx-xml-adapter   # .fcpxml (FCP X / Resolve)
+pip install otio-aaf-adapter        # .aaf (Avid)
 ```
 
 ## CLI usage
@@ -36,38 +47,63 @@ pip install -e ".[dev]"     # + pytest
 # same format
 otio-diff baseline.otio revised.otio
 
-# mixed formats — adapters auto-detect
+# mixed formats — adapters auto-detect by extension
 otio-diff editors_cut.edl finishing.fcpxml
 
 # machine-readable
 otio-diff a.otio b.otio --json
 ```
 
-Human output:
+Worked example — cut B has one clip trimmed by 12 frames:
 
 ```
-2 added, 1 removed, 1 retimed (14 unchanged)
+$ otio-diff cut_a.edl cut_b.fcpxml
+1 retimed, 1 shifted (1 unchanged)
+  ~ B shortened by 12f (48f -> 36f)
+  . C shifted 12f earlier
 ```
+
+The five change categories:
+
+| Category  | Meaning |
+|-----------|---------|
+| `added`   | clip in B, not in A |
+| `removed` | clip in A, not in B |
+| `retimed` | same clip, trimmed duration changed |
+| `moved`   | same clip, different ordinal position (reorder) |
+| `shifted` | same clip, only slid on the timeline — the ripple effect of an upstream edit, kept separate so one trim doesn't read as N retimes downstream |
 
 JSON output (shape):
 
 ```json
 {
-  "added":   [ { "name": "...", "media_url": "...", "src_start": 0.0, ... } ],
+  "added":   [ { "name": "...", "media_url": "...", "src_start": 0.0, "rate": 24.0, ... } ],
   "removed": [ ... ],
   "retimed": [ { "key": [...], "before": {...}, "after": {...} } ],
   "moved":   [ ... ],
-  "unchanged_count": 14
+  "shifted": [ ... ],
+  "unchanged_count": 1
 }
 ```
 
+## For agents
+
+- **Exit codes follow `diff(1)`**: `0` = no structural changes, `1` = changes
+  found, `2` = could not read an input. Branch on the exit code without parsing.
+- **`--json` is stable-shaped**: the six top-level keys above are always
+  present, empty lists included. Times are float seconds; `rate` is the clip
+  frame rate (multiply to get frames).
+- **MCP server**: register `mcp_server.py` as a stdio server; it exposes one
+  tool, `diff_timelines(path_a, path_b) -> dict`, returning the same shape as
+  `--json`.
+- Errors go to stderr; stdout is exclusively the diff result.
+
 ## MCP usage
 
-Register `mcp_server.py` as a stdio MCP server in your client config. It exposes
-one tool:
+Register `mcp_server.py` as a stdio MCP server in your client config:
 
-```
-diff_timelines(path_a: str, path_b: str) -> dict
+```json
+{ "otio-diff": { "command": "python", "args": ["/path/to/mcp_server.py"] } }
 ```
 
 Then an agent can ask, e.g., *"diff the editor's cut against the finishing
@@ -82,11 +118,13 @@ timeline and tell me which shots were added overnight."*
 ## How it works (one paragraph)
 
 `read_from_file()` parses either input into OTIO's in-memory `Timeline`. The
-engine flattens each to a list of clip records, then **matches clips by identity**
-— `(media url, source in-point, duration)`, not timeline position, because
-inserting one clip shifts every downstream timecode and would make a positional
-diff report everything as changed. Matched clips are classified into
-added / removed / retimed / moved.
+engine flattens each to a list of clip records (recursing into nested stacks),
+then **matches clips by identity** — `(media url, source in-point)`, not timeline
+position, because inserting one clip shifts every downstream timecode and would
+make a positional diff report everything as changed. Duration is compared as an
+attribute after matching, so an out-point trim reads as *retimed* rather than
+removed+added. Duplicate identities are paired as a multiset. Matched clips are
+classified into added / removed / retimed / moved / shifted.
 
 ## Maintenance contract
 
@@ -101,14 +139,10 @@ effects/transition territory — pull it back out.
 pytest
 ```
 
-The suite (`test_otio_diff.py`) builds fixtures in-memory and defines v1
-acceptance. Notable cases: duplicate-clip timelines (multiset matching),
-nested stacks (flattening), and missing media references (no crash).
-
-## Status
-
-v1 scaffold. See `HANDOFF.md` for the completed design decisions and the
-remaining `TODO(handoff)` items. Build the tests to green.
+The suite (`test_otio_diff.py`) builds fixtures in-memory and defines
+acceptance. Notable cases: duplicate-clip timelines (multiset matching), nested
+stacks (flattening), missing media references (no crash), collection-returning
+adapters, exit codes, and frame-accurate output.
 
 ## License
 

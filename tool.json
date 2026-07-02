@@ -1,0 +1,27 @@
+{
+  "name": "otio-diff",
+  "description": "Structural editorial diff between two timelines: which clips were added, removed, retimed, moved, or shifted between cut A and cut B. Reads any format an installed OpenTimelineIO adapter supports (.otio built in; .edl/.fcpxml/.aaf via adapter plugins).",
+  "usage": "otio-diff <baseline> <revised> [--json]",
+  "exit_codes": {
+    "0": "no structural changes",
+    "1": "changes found",
+    "2": "could not read an input file"
+  },
+  "output": {
+    "human": "summary line plus per-item detail lines with frame-accurate deltas",
+    "json": {
+      "added": "clip records present only in revised",
+      "removed": "clip records present only in baseline",
+      "retimed": "{key, before, after} — trimmed duration changed",
+      "moved": "{key, before, after} — ordinal position changed",
+      "shifted": "{key, before, after} — slid on the timeline (ripple only)",
+      "unchanged_count": "int"
+    },
+    "notes": "all six keys always present; times are float seconds; multiply by 'rate' for frames; stdout carries only the result, errors go to stderr"
+  },
+  "mcp": {
+    "server": "mcp_server.py",
+    "transport": "stdio",
+    "tools": ["diff_timelines(path_a, path_b) -> dict"]
+  }
+}

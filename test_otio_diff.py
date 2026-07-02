@@ -191,6 +191,20 @@ def test_human_detail_frames():
     assert "C shifted 12f earlier" in out
 
 
+def test_exit_codes(tmp_path, capsys):
+    """diff(1) convention: 0 = no changes, 1 = changes found, 2 = read error."""
+    from otio_diff import main
+    a = str(tmp_path / "a.otio")
+    b = str(tmp_path / "b.otio")
+    otio.adapters.write_to_file(baseline(), a)
+    otio.adapters.write_to_file(_timeline([_clip("A", *A), _clip("C", *C)]), b)
+
+    assert main([a, a]) == 0          # identical
+    assert main([a, b]) == 1          # B removed -> changes found
+    assert main([a, str(tmp_path / "missing.otio")]) == 2  # unreadable
+    capsys.readouterr()  # swallow CLI output
+
+
 def test_load_serializable_collection(tmp_path, capsys):
     """Adapters may return a SerializableCollection; load() picks the first
     Timeline and warns on stderr when more than one is present."""

@@ -360,7 +360,11 @@ def main(argv=None) -> int:
         print(json.dumps(asdict(result), indent=2))
     else:
         print(human(result))
-    return 0
+    # diff(1) convention, agent-friendly: 0 = no structural changes,
+    # 1 = changes found, 2 = error (returned above on read failure).
+    has_changes = bool(result.added or result.removed or result.retimed
+                       or result.moved or result.shifted)
+    return 1 if has_changes else 0
 
 
 if __name__ == "__main__":
