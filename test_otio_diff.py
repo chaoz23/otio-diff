@@ -78,6 +78,7 @@ def baseline():
 def test_identical_is_no_change():
     d = diff(flatten_timeline(baseline()), flatten_timeline(baseline()))
     assert not d.added and not d.removed and not d.retimed and not d.moved
+    assert not d.shifted
     assert d.unchanged_count == 3
 
 
@@ -100,36 +101,42 @@ def test_removed():
 
 def test_retimed():
     # B shortened from 48f to 36f (same media, same in-point, shorter duration).
-    # NOTE: this changes B's identity duration, so depending on final key design
-    # this may surface as removed+added rather than retimed. The finisher must
-    # DECIDE and make this test express the chosen semantics. Recommended:
-    # identity key on (url, src_start) only for retime detection, with duration
-    # compared as an attribute -> lets a shortened clip read as "retimed".
-    # TODO(handoff): reconcile clip_key() with this. Pick one and make it pass.
+    # RESOLVED (2026-07-02): identity key is (url, src_start); duration is a
+    # compared attribute, so B reads as retimed. C slides earlier as the knock-on
+    # ripple and reads as "shifted", NOT retimed — that separation is the point.
+    # (The earlier version of this test passed vacuously: B fell out of its own
+    # identity as removed+added, and the lone "retimed" entry was actually C.)
     B_short = ("file:///B.mov", 0.0, 36.0)
     revised = _timeline([_clip("A", *A), _clip("B", *B_short), _clip("C", *C)])
     d = diff(flatten_timeline(baseline()), flatten_timeline(revised))
-    # Assert the INTENT: exactly one clip changed timing, nothing truly added/removed.
-    assert len(d.retimed) == 1, (
-        "B should read as retimed, not add/remove. If it doesn't, adjust clip_key "
-        "so duration is an attribute, not part of identity. See TODO above."
+    assert not d.added and not d.removed, (
+        "a trimmed clip must not read as add/remove — duration is an attribute, "
+        "not identity"
     )
+    assert len(d.retimed) == 1
+    assert d.retimed[0]["before"]["media_url"] == "file:///B.mov"
+    assert len(d.shifted) == 1, "C slid earlier — should be shifted, not retimed"
+    assert d.shifted[0]["before"]["media_url"] == "file:///C.mov"
+    assert d.unchanged_count == 1  # A
 
 
 def test_moved_reorder():
     revised = _timeline([_clip("A", *A), _clip("C", *C), _clip("B", *B)])  # B/C swap
     d = diff(flatten_timeline(baseline()), flatten_timeline(revised))
     assert d.moved, "reorder should populate moved"
-    assert not d.added and not d.removed
+    assert not d.added and not d.removed and not d.retimed
+    assert not d.shifted, "moved subsumes the position change — no shifted noise"
 
 
 def test_duplicate_clip_multiset():
     """
-    SHIP-BLOCKER. Baseline A B C ; revised A A B  (C removed, extra A added).
-    With the scaffold's unique-key assumption this MISCOUNTS. Correct result:
+    Multiset pairing. Baseline A B C ; revised A A B  (C removed, extra A added).
+    Correct result:
       - one A is unchanged/matched
       - one A is added
       - C is removed
+    (Historical note: an earlier handoff draft flagged this as a ship-blocker;
+    the multiset pairing in diff() handles it.)
     """
     revised = _timeline([_clip("A", *A), _clip("A", *A), _clip("B", *B)])
     d = diff(flatten_timeline(baseline()), flatten_timeline(revised))

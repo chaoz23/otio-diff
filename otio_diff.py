@@ -16,10 +16,13 @@ Design decisions locked in (do not relitigate without reason):
   1. A cut is NOT positionally diffable. Inserting one clip at the head shifts
      every downstream timecode, so we MATCH clips by identity first, then
      classify. See `clip_key()`.
-  2. Identity key = (media target_url, source_range.start_time, source_range.duration).
-     Rationale: the same source media cut at the same in/out point is "the same
-     clip" regardless of where it sits on the timeline. Name is deliberately NOT
-     in the key (editors rename freely; media+range is the stable identity).
+  2. Identity key = (media target_url, source_range.start_time). Duration is
+     compared as an ATTRIBUTE after matching, so an out-point trim reads as
+     "retimed" instead of removed+added. (Revised 2026-07-02 with a concrete
+     failing case — see clip_key docstring.) Name is deliberately NOT in the key
+     (editors rename freely; media+in-point is the stable identity). Clips that
+     merely slid on the timeline (ripple from an upstream edit) are reported as
+     "shifted", separate from "retimed".
   3. Scope is STRUCTURAL EDITORIAL ONLY: clips, timing, order. We do NOT diff
      effects/transitions/retime curves. OTIO's own docs are explicit that those
      serialize in proprietary, tool-specific ways and don't round-trip. Diffing
@@ -143,20 +146,33 @@ def flatten_timeline(tl: otio.schema.Timeline) -> list[ClipRecord]:
 def clip_key(rec: ClipRecord) -> tuple:
     """
     Identity key for matching a clip across two timelines. See design note #2.
+
+    Identity is (media_url, src_start) — duration is deliberately NOT part of
+    identity. It's compared as an attribute after matching, so an out-point trim
+    reads as "retimed" rather than removed+added. (Verified failing case that
+    forced this: with duration in the key, a shortened clip fell out of its own
+    identity and test_retimed only passed because a downstream clip's knock-on
+    timeline shift populated `retimed`.)
+
+    Known limitation: a head trim changes src_start and therefore identity, so it
+    reads as removed+added. Loosening further (url-only + nearest-match pairing)
+    is deferred until a real export shows it's needed.
+
     Rounding src times to frame-ish granularity avoids float drift between
     adapters. # TODO(handoff): make rounding rate-aware if false-mismatches show
     up in AAF<->FCPXML tests (adapters can differ in sub-frame representation).
     """
     def r(x): return round(x, 4) if x is not None else None
-    return (rec.media_url, r(rec.src_start), r(rec.src_duration))
+    return (rec.media_url, r(rec.src_start))
 
 
 @dataclass
 class DiffResult:
     added: list[dict]      # in B, not A
     removed: list[dict]    # in A, not B
-    retimed: list[dict]    # same identity, different trimmed range
-    moved: list[dict]      # same identity, different position
+    retimed: list[dict]    # same identity, different trimmed duration
+    moved: list[dict]      # same identity, different ordinal position
+    shifted: list[dict]    # same identity/content, only slid on the timeline (ripple)
     unchanged_count: int
 
 
@@ -184,7 +200,7 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
     for r in b:
         b_by_key[clip_key(r)].append(r)
 
-    added, removed, retimed, moved = [], [], [], []
+    added, removed, retimed, moved, shifted = [], [], [], [], []
     unchanged = 0
 
     all_keys = set(a_by_key) | set(b_by_key)
@@ -198,14 +214,19 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
         for i in range(pairs):
             ra, rb = a_recs[i], b_recs[i]
             changed = False
-            # retimed: trimmed duration/start on the timeline differs
-            if (ra.src_duration != rb.src_duration
-                    or ra.timeline_start != rb.timeline_start):
+            # retimed: the clip's own content timing changed (trimmed duration)
+            if ra.src_duration != rb.src_duration:
                 retimed.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
                 changed = True
             # moved: same identity, different ordinal position
             if (ra.track_index, ra.position_index) != (rb.track_index, rb.position_index):
                 moved.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
+                changed = True
+            # shifted: content and position untouched, but the clip slid on the
+            # timeline — the ripple effect of an upstream edit. Kept separate so
+            # one trim doesn't read as N retimes downstream.
+            if not changed and ra.timeline_start != rb.timeline_start:
+                shifted.append({"key": key, "before": asdict(ra), "after": asdict(rb)})
                 changed = True
             if not changed:
                 unchanged += 1
@@ -216,7 +237,7 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
         for r in b_recs[pairs:]:
             added.append(asdict(r))
 
-    return DiffResult(added, removed, retimed, moved, unchanged)
+    return DiffResult(added, removed, retimed, moved, shifted, unchanged)
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +263,8 @@ def human(result: DiffResult) -> str:
         lines.append(f"{len(result.retimed)} retimed")
     if result.moved:
         lines.append(f"{len(result.moved)} moved")
+    if result.shifted:
+        lines.append(f"{len(result.shifted)} shifted")
     if not lines:
         return "No structural changes."
     head = ", ".join(lines) + f" ({result.unchanged_count} unchanged)"

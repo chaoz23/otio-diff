@@ -9,17 +9,12 @@ Run (once dependencies installed):
     python mcp_server.py
 Register in an MCP client config as a stdio server pointing at this file.
 
-HANDOFF NOTE
-============
-This is written against the Python MCP SDK's FastMCP-style API. The SDK surface
-has moved a little across versions; if imports differ under your pinned `mcp`
-version, adjust the two import/registration lines — the engine call is stable.
-# TODO(handoff): verify against the exact `mcp` version you pin, then delete this note.
+Import path verified against mcp==1.28.1 (pinned in requirements.txt).
 """
 
 from dataclasses import asdict
 
-from mcp.server.fastmcp import FastMCP  # TODO(handoff): confirm import path for pinned SDK
+from mcp.server.fastmcp import FastMCP
 
 from otio_diff import load, diff
 

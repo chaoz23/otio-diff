@@ -9,17 +9,17 @@ description = "Structural editorial diff between two timelines (OpenTimelineIO).
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }  # match OTIO's license for easy upstream contribution
-authors = [{ name = "TODO(handoff): your name" }]
+authors = [{ name = "chaoz23", email = "chaoz23@gmail.com" }]
 keywords = ["opentimelineio", "otio", "editorial", "diff", "video", "post-production", "mcp"]
 
-# TODO(handoff): pin exact versions here to mirror requirements.txt at release.
+# Exact versions tested — mirror requirements.txt (OTIO 0.18.1, mcp 1.28.1).
 dependencies = [
-    "opentimelineio>=0.17,<0.20",
+    "opentimelineio==0.18.1",
 ]
 
 [project.optional-dependencies]
 # The MCP wrapper is optional — the CLI works standalone without it.
-mcp = ["mcp>=1.0"]
+mcp = ["mcp==1.28.1"]
 dev = ["pytest>=7"]
 
 [project.scripts]
@@ -27,9 +27,8 @@ dev = ["pytest>=7"]
 otio-diff = "otio_diff:main"
 
 [project.urls]
-# TODO(handoff): fill in once the repo exists.
-Homepage = "https://github.com/TODO/otio-diff"
-Issues = "https://github.com/TODO/otio-diff/issues"
+Homepage = "https://github.com/chaoz23/otio-diff"
+Issues = "https://github.com/chaoz23/otio-diff/issues"
 
 [tool.setuptools]
 # Single-module layout: otio_diff.py + mcp_server.py at repo root.
