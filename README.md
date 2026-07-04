@@ -124,7 +124,10 @@ position, because inserting one clip shifts every downstream timecode and would
 make a positional diff report everything as changed. Duration is compared as an
 attribute after matching, so an out-point trim reads as *retimed* rather than
 removed+added. Duplicate identities are paired as a multiset. Matched clips are
-classified into added / removed / retimed / moved / shifted.
+classified into added / removed / retimed / moved / shifted. When media is
+offline and has no URL, the clip name is used as a fallback identity; unnamed
+offline clips remain unmatched so an ambiguous pair cannot be reported as
+unchanged.
 
 ## Maintenance contract
 
@@ -141,7 +144,7 @@ pytest
 
 The suite (`test_otio_diff.py`) builds fixtures in-memory and defines
 acceptance. Notable cases: duplicate-clip timelines (multiset matching), nested
-stacks (flattening), missing media references (no crash), collection-returning
+stacks (flattening), missing-media identity and ambiguity, collection-returning
 adapters, exit codes, and frame-accurate output.
 
 ## License

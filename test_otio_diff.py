@@ -61,7 +61,7 @@ def _timeline(clips, name="t"):
     return tl
 
 
-# Canonical media URLs — identity is (url, src_start, src_dur), NOT name.
+# Canonical media URLs — identity is (url, src_start), NOT name or duration.
 A = ("file:///A.mov", 0.0, 48.0)
 B = ("file:///B.mov", 0.0, 48.0)
 C = ("file:///C.mov", 0.0, 48.0)
@@ -182,6 +182,54 @@ def test_missing_available_range_does_not_crash():
     tl = _timeline([clip])
     recs = flatten_timeline(tl)  # should not raise
     assert recs[0].media_url is None
+
+
+def _offline_clip(name: str, duration: float = 24.0):
+    """A clip whose media is unavailable but whose editorial name survives."""
+    return otio.schema.Clip(
+        name=name,
+        media_reference=otio.schema.MissingReference(),
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0, 24),
+            duration=otio.opentime.RationalTime(duration, 24),
+        ),
+    )
+
+
+def test_distinct_offline_clips_do_not_match():
+    """Different offline shots at the same source in-point are add/remove."""
+    before = _timeline([_offline_clip("SHOT_010")])
+    after = _timeline([_offline_clip("SHOT_900")])
+
+    d = diff(flatten_timeline(before), flatten_timeline(after))
+
+    assert [r["name"] for r in d.removed] == ["SHOT_010"]
+    assert [r["name"] for r in d.added] == ["SHOT_900"]
+    assert d.unchanged_count == 0
+
+
+def test_named_offline_clip_can_be_retimed():
+    """A surviving clip name provides identity when its media is offline."""
+    before = _timeline([_offline_clip("SHOT_010", duration=24)])
+    after = _timeline([_offline_clip("SHOT_010", duration=12)])
+
+    d = diff(flatten_timeline(before), flatten_timeline(after))
+
+    assert not d.added and not d.removed
+    assert len(d.retimed) == 1
+    assert d.retimed[0]["before"]["name"] == "SHOT_010"
+
+
+def test_unnamed_offline_clips_remain_unmatched():
+    """Ambiguous records must not become a false unchanged match."""
+    before = _timeline([_offline_clip("")])
+    after = _timeline([_offline_clip("")])
+
+    d = diff(flatten_timeline(before), flatten_timeline(after))
+
+    assert len(d.removed) == 1
+    assert len(d.added) == 1
+    assert d.unchanged_count == 0
 
 
 def test_human_detail_frames():
