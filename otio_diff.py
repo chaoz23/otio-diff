@@ -20,7 +20,8 @@ Design decisions locked in (do not relitigate without reason):
      compared as an ATTRIBUTE after matching, so an out-point trim reads as
      "retimed" instead of removed+added. (Revised 2026-07-02 with a concrete
      failing case — see clip_key docstring.) Name is deliberately NOT in the key
-     (editors rename freely; media+in-point is the stable identity). Clips that
+     when a media URL exists (editors rename freely; media+in-point is the stable
+     identity), but is the best available fallback for offline media. Clips that
      merely slid on the timeline (ripple from an upstream edit) are reported as
      "shifted", separate from "retimed".
   3. Scope is STRUCTURAL EDITORIAL ONLY: clips, timing, order. We do NOT diff
@@ -149,16 +150,22 @@ def flatten_timeline(tl: otio.schema.Timeline) -> list[ClipRecord]:
 # Match + classify. This is the heart of the tool.
 # ---------------------------------------------------------------------------
 
-def clip_key(rec: ClipRecord) -> tuple:
+def clip_key(rec: ClipRecord) -> Optional[tuple]:
     """
     Identity key for matching a clip across two timelines. See design note #2.
 
-    Identity is (media_url, src_start) — duration is deliberately NOT part of
-    identity. It's compared as an attribute after matching, so an out-point trim
-    reads as "retimed" rather than removed+added. (Verified failing case that
-    forced this: with duration in the key, a shortened clip fell out of its own
-    identity and test_retimed only passed because a downstream clip's knock-on
-    timeline shift populated `retimed`.)
+    Identity is (media_url, src_start) when a media URL is available. Offline
+    clips fall back to (name, src_start), since MissingReference has no durable
+    media identifier. An unnamed offline clip returns None and is deliberately
+    left unmatched: reporting add/remove is safer than silently treating two
+    ambiguous records as unchanged.
+
+    Duration is deliberately NOT part of identity. It's compared as an
+    attribute after matching, so an out-point trim reads as "retimed" rather
+    than removed+added. (Verified failing case that forced this: with duration
+    in the key, a shortened clip fell out of its own identity and test_retimed
+    only passed because a downstream clip's knock-on timeline shift populated
+    `retimed`.)
 
     Known limitation: a head trim changes src_start and therefore identity, so it
     reads as removed+added. Loosening further (url-only + nearest-match pairing)
@@ -169,7 +176,12 @@ def clip_key(rec: ClipRecord) -> tuple:
     up in AAF<->FCPXML tests (adapters can differ in sub-frame representation).
     """
     def r(x): return round(x, 4) if x is not None else None
-    return (rec.media_url, r(rec.src_start))
+    if rec.media_url:
+        # Preserve the established key shape for normal, online media.
+        return (rec.media_url, r(rec.src_start))
+    if rec.name:
+        return ("name", rec.name, r(rec.src_start))
+    return None
 
 
 @dataclass
@@ -201,12 +213,24 @@ def diff(a: list[ClipRecord], b: list[ClipRecord]) -> DiffResult:
 
     a_by_key: dict[tuple, list[ClipRecord]] = defaultdict(list)
     b_by_key: dict[tuple, list[ClipRecord]] = defaultdict(list)
+    unmatched_a: list[ClipRecord] = []
+    unmatched_b: list[ClipRecord] = []
     for r in a:
-        a_by_key[clip_key(r)].append(r)
+        key = clip_key(r)
+        if key is None:
+            unmatched_a.append(r)
+        else:
+            a_by_key[key].append(r)
     for r in b:
-        b_by_key[clip_key(r)].append(r)
+        key = clip_key(r)
+        if key is None:
+            unmatched_b.append(r)
+        else:
+            b_by_key[key].append(r)
 
-    added, removed, retimed, moved, shifted = [], [], [], [], []
+    added = [asdict(r) for r in unmatched_b]
+    removed = [asdict(r) for r in unmatched_a]
+    retimed, moved, shifted = [], [], []
 
     # Phase 1: pair matched clips; classify surplus as added/removed.
     matched: list[tuple[tuple, ClipRecord, ClipRecord]] = []
