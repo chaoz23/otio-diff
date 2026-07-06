@@ -12,7 +12,7 @@ readme = "README.md"
 # Verified 2026-07-02; lift the cap when an OTIO release fixes it.
 requires-python = ">=3.9,<3.14"
 license = { text = "Apache-2.0" }  # match OTIO's license for easy upstream contribution
-authors = [{ name = "chaoz23", email = "chaoz23@gmail.com" }]
+authors = [{ name = "Daniel Strader (chaoz23)", email = "chaoz23@gmail.com" }]
 keywords = ["opentimelineio", "otio", "editorial", "diff", "video", "post-production", "mcp"]
 
 # Exact versions tested — mirror requirements.txt (OTIO 0.18.1, mcp 1.28.1).
