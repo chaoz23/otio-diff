@@ -149,5 +149,5 @@ adapters, exit codes, and frame-accurate output.
 
 ## License
 
-Apache-2.0 (matches OpenTimelineIO, to keep an upstream `examples/` contribution
-frictionless).
+[Apache-2.0](LICENSE) (matches OpenTimelineIO, to keep an upstream `examples/`
+contribution frictionless).
