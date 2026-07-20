@@ -34,8 +34,9 @@ def diff_timelines(path_a: str, path_b: str) -> dict:
         path_b: revised timeline file path.
 
     Returns:
-        dict with keys: added, removed, retimed, moved, unchanged_count.
-        Each list holds clip records (name, media_url, source/timeline timing).
+        dict with keys: added, removed, retimed, moved, shifted, unchanged_count.
+        Each list holds clip records (name, media_url, source/timeline timing);
+        shifted records describe ripple-only timeline slides.
     """
     result = diff(load(path_a), load(path_b))
     return asdict(result)

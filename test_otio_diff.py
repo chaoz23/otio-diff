@@ -25,6 +25,7 @@ Fixture map (baseline = three clips A,B,C on one track):
 
 import opentimelineio as otio
 import pytest
+from pathlib import Path
 
 from otio_diff import flatten_timeline, diff, load  # noqa: F401
 
@@ -286,3 +287,11 @@ def test_load_serializable_collection(tmp_path, capsys):
     recs = load(path)
     assert len(recs) == 3  # the baseline timeline, not the 1-clip one
     assert "2 timelines" in capsys.readouterr().err
+
+
+def test_mcp_return_contract_mentions_shifted():
+    """The MCP-facing tool description must stay aligned with DiffResult."""
+    text = Path("mcp_server.py").read_text(encoding="utf-8")
+
+    assert "shifted" in text
+    assert "added, removed, retimed, moved, shifted, unchanged_count" in text
